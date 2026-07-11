@@ -51,7 +51,9 @@ EXTRA_PAGES = [
     "https://www.chromehearts.com/boxers-leggings",
     "https://www.chromehearts.com/intimates",
     "https://www.chromehearts.com/socks",
-    "https://www.chromehearts.com/scarf",
+    "https://www.chromehearts.com/hoodie",
+    "https://www.chromehearts.com/shirt",
+    "https://www.chromehearts.com/shirts",
 ]
 
 # Chrome Hearts product pages follow the pattern:
