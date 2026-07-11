@@ -51,8 +51,7 @@ EXTRA_PAGES = [
     "https://www.chromehearts.com/boxers-leggings",
     "https://www.chromehearts.com/intimates",
     "https://www.chromehearts.com/socks",
-    "https://www.chromehearts.com/hoodie",
-   "https://www.chromehearts.com/shirt",
+    "https://www.chromehearts.com/scarf",
 ]
 
 # Chrome Hearts product pages follow the pattern:
@@ -173,6 +172,7 @@ def send_discord_alert(new_urls: set) -> None:
         chunk = urls_list[i : i + chunk_size]
         description = "\n".join(f"• {u}" for u in chunk)
         payload = {
+            "content": "@here",
             "embeds": [
                 {
                     "title": "🚨 New Chrome Hearts URL(s) Detected",
