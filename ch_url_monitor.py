@@ -174,7 +174,7 @@ def send_discord_alert(new_urls: set) -> None:
         chunk = urls_list[i : i + chunk_size]
         description = "\n".join(f"• {u}" for u in chunk)
         payload = {
-            "content": "<@here>",
+            "content": "<@222217823382929408>",
             "embeds": [
                 {
                     "title": "🚨 New Chrome Hearts URL(s) Detected",
