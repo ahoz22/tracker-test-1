@@ -1,24 +1,29 @@
 """
 Chrome Hearts URL Monitor
 --------------------------
-Periodically crawls target pages on the Chrome Hearts site, extracts all
-product/collection links, and pings a Discord webhook whenever a URL shows
-up that wasn't seen on the previous sweep.
+Each sweep:
+  1. Visits the Chrome Hearts homepage and reads the current nav menu to
+     discover whatever category pages are LIVE right now (Chrome Hearts
+     rotates these — "Baccarat", "Scents", "Scarf", "Hat" etc. come and go
+     with current drops, so we don't hardcode a fixed category list).
+  2. Visits each of those category pages and collects product links.
+  3. Compares against the saved list from the last run.
+  4. Pings a Discord webhook for anything genuinely new.
 
 SETUP:
 1. pip install requests beautifulsoup4 lxml
 2. Set DISCORD_WEBHOOK_URL below (or as an env var).
-3. Add/adjust TARGET_PAGES to whatever sections you want watched
-   (e.g. new arrivals, a specific category, the homepage).
-4. Run it. First run just builds the baseline (no alerts fired, since
+3. Run it. First run just builds the baseline (no alerts fired, since
    everything is "new"). From the second run onward, only genuinely new
-   URLs trigger a Discord message.
-5. Schedule it (see bottom of file for a simple loop, or use cron).
+   product URLs trigger a Discord message.
+4. Schedule it (see bottom of file for a simple loop, or use cron/GitHub
+   Actions with RUN_ONCE=true).
 """
 
 import concurrent.futures
 import json
 import os
+import re
 import time
 import random
 from pathlib import Path
@@ -34,15 +39,37 @@ DISCORD_WEBHOOK_URL = os.environ.get(
     "PUT_YOUR_WEBHOOK_URL_HERE",
 )
 
-# Pages to crawl each sweep. Add category/collection pages you care about.
-TARGET_PAGES = [
-    "https://www.chromehearts.com/",
-    # "https://www.chromehearts.com/collections/new-arrivals",
-    # add more category URLs here
+HOMEPAGE_URL = "https://www.chromehearts.com/"
+
+# Optional: pin specific category pages here as a safety net, in case a
+# category is ever unlinked from the nav but you still want it watched.
+# Auto-discovery (below) usually makes this unnecessary, but it's a
+# harmless fallback.
+EXTRA_PAGES = [
+    "https://www.chromehearts.com/baccarat",
+    "https://www.chromehearts.com/scents",
+    "https://www.chromehearts.com/boxers-leggings",
+    "https://www.chromehearts.com/intimates",
+    "https://www.chromehearts.com/socks",
+    "https://www.chromehearts.com/hoodie",
+   "https://www.chromehearts.com/shirt",
 ]
 
-# Only alert on links that look like product/collection pages (adjust to taste)
-URL_MUST_CONTAIN = ["/products/", "/collections/"]
+# Chrome Hearts product pages follow the pattern:
+#   /{category}/{product-name}/{SKU}.html
+# e.g. /baccarat/tumbler/174132CRYXXX015.html
+# e.g. /scarf/ch-scarf/075372A7TXXX007.html
+# This works for ANY category name (hat, hoodie, scarf, etc.) since it
+# matches the URL *shape*, not a specific category word.
+PRODUCT_URL_PATTERN = re.compile(r"^/[^/]+/[^/]+/[A-Za-z0-9\-]+\.html$")
+
+# Known non-category pages that show up in the nav/footer but aren't
+# product categories — used to filter out junk when auto-discovering
+# category pages from the homepage.
+EXCLUDED_SLUGS = {
+    "", "locations", "magazine", "login", "cart", "terms",
+    "disclosure", "privacy", "general", "contact",
+}
 
 STATE_FILE = Path("seen_urls.json")
 CHECK_INTERVAL_SECONDS = 60 * 15  # 15 minutes — tune as you like
@@ -69,8 +96,8 @@ def save_seen_urls(urls: set) -> None:
         json.dump(sorted(urls), f, indent=2)
 
 
-def fetch_links(page_url: str) -> set:
-    """Grab all internal links from a page that match our filters.
+def get_page_links(page_url: str) -> set:
+    """Fetch a page and return every on-domain link found (unfiltered).
 
     Uses a hard wall-clock timeout (via a worker thread) in addition to
     requests' own timeout. Some sites with bot-protection deliberately
@@ -86,7 +113,7 @@ def fetch_links(page_url: str) -> set:
             resp = future.result(timeout=25)  # absolute cap, no matter what
         resp.raise_for_status()
     except concurrent.futures.TimeoutError:
-        print(f"[warn] {page_url} took too long (>25s) — skipping this sweep. "
+        print(f"[warn] {page_url} took too long (>25s) — skipping. "
               f"This usually means the site is throttling/blocking automated requests.")
         return set()
     except requests.RequestException as e:
@@ -96,25 +123,40 @@ def fetch_links(page_url: str) -> set:
     soup = BeautifulSoup(resp.text, "lxml")
     base_domain = urlparse(page_url).netloc
 
-    found = set()
+    links = set()
     for a in soup.find_all("a", href=True):
-        href = a["href"]
-        full_url = urljoin(page_url, href)
+        full_url = urljoin(page_url, a["href"])
         parsed = urlparse(full_url)
-
-        # stay on-domain
         if parsed.netloc != base_domain:
             continue
-
-        # only keep URLs matching our patterns of interest
-        if URL_MUST_CONTAIN and not any(p in full_url for p in URL_MUST_CONTAIN):
-            continue
-
         # strip query params/fragments so ?variant=123 doesn't look "new"
         clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        found.add(clean_url)
+        links.add(clean_url)
 
-    return found
+    return links
+
+
+def is_category_url(path: str) -> bool:
+    """A category page is a single clean path segment, e.g. /scarf,
+    /baccarat, /hat — not a file (.html) and not a known junk page."""
+    clean = path.strip("/")
+    if not clean or "." in clean or "/" in clean:
+        return False
+    return clean.lower() not in EXCLUDED_SLUGS
+
+
+def is_product_url(path: str) -> bool:
+    return bool(PRODUCT_URL_PATTERN.match(path))
+
+
+def discover_category_pages() -> set:
+    """Read the live homepage nav to find whatever category pages are
+    currently active — adapts automatically as Chrome Hearts rotates
+    categories in and out (e.g. "scarf" one week, "hat" the next)."""
+    homepage_links = get_page_links(HOMEPAGE_URL)
+    categories = {u for u in homepage_links if is_category_url(urlparse(u).path)}
+    print(f"[info] discovered {len(categories)} live category page(s): {sorted(categories)}")
+    return categories
 
 
 def send_discord_alert(new_urls: set) -> None:
@@ -150,9 +192,12 @@ def run_sweep() -> None:
     seen = load_seen_urls()
     is_first_run = len(seen) == 0
 
+    pages_to_check = discover_category_pages() | set(EXTRA_PAGES)
+
     current_urls = set()
-    for page in TARGET_PAGES:
-        current_urls |= fetch_links(page)
+    for page in pages_to_check:
+        page_links = get_page_links(page)
+        current_urls |= {u for u in page_links if is_product_url(urlparse(u).path)}
         time.sleep(random.uniform(1, 3))  # be polite between requests
 
     new_urls = current_urls - seen
