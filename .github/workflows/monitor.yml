@@ -11,6 +11,7 @@ permissions:
 jobs:
   check-for-new-urls:
     runs-on: ubuntu-latest
+    timeout-minutes: 5   # safety net: kill the job if it ever hangs
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -27,7 +28,8 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           RUN_ONCE: "true"
-        run: python ch_url_monitor.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u ch_url_monitor.py
 
       - name: Save updated URL list back to the repo
         run: |
