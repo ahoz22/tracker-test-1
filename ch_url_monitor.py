@@ -198,6 +198,16 @@ def get_page_links(page_url: str) -> set:
     base_domain = urlparse(page_url).netloc
 
     links = set()
+
+    # A category page can redirect straight to a single product when
+    # that category currently has only one item (e.g. /eyewear ->
+    # /eyewear/hollyweird/SKU.html). The product page itself often has
+    # no link pointing back to its own URL (just an "Add to Bag" button),
+    # so without this check, that product would never be found.
+    final_url = urlparse(resp.url)
+    if final_url.netloc == base_domain:
+        links.add(f"{final_url.scheme}://{final_url.netloc}{final_url.path}")
+
     for a in soup.find_all("a", href=True):
         full_url = urljoin(page_url, a["href"])
         parsed = urlparse(full_url)
