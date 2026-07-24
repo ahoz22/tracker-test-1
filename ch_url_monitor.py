@@ -85,8 +85,13 @@ HEADERS = {
 
 def load_seen_urls() -> set:
     if STATE_FILE.exists():
-        with open(STATE_FILE, "r") as f:
-            return set(json.load(f))
+        try:
+            with open(STATE_FILE, "r") as f:
+                return set(json.load(f))
+        except json.JSONDecodeError:
+            print(f"[warn] {STATE_FILE} exists but isn't valid JSON (empty or "
+                  f"corrupted) — treating as no history and starting fresh.")
+            return set()
     return set()
 
 
