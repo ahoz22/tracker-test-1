@@ -51,9 +51,7 @@ EXTRA_PAGES = [
     "https://www.chromehearts.com/boxers-leggings",
     "https://www.chromehearts.com/intimates",
     "https://www.chromehearts.com/socks",
-    "https://www.chromehearts.com/hoodie",
-    "https://www.chromehearts.com/shirt",
-    "https://www.chromehearts.com/shirts",
+    "https://www.chromehearts.com/scarf",
 ]
 
 # Chrome Hearts product pages follow the pattern:
@@ -95,6 +93,76 @@ def load_seen_urls() -> set:
 def save_seen_urls(urls: set) -> None:
     with open(STATE_FILE, "w") as f:
         json.dump(sorted(urls), f, indent=2)
+
+
+def fetch_text(url: str) -> str:
+    """Fetch raw text content from a URL (used for robots.txt / sitemaps),
+    with the same hard wall-clock timeout protection as get_page_links."""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(requests.get, url, headers=HEADERS, timeout=15)
+            resp = future.result(timeout=25)
+        if resp.status_code != 200:
+            return ""
+        return resp.text
+    except (concurrent.futures.TimeoutError, requests.RequestException):
+        return ""
+
+
+def discover_sitemap_product_urls() -> set:
+    """Second, independent discovery method: read robots.txt to find any
+    sitemap(s), then scan those for product URLs.
+
+    This exists because the homepage nav ROTATES and doesn't always link
+    to every live category (e.g. a new "eyewear" line might release
+    without immediately appearing in the visible "Shop" menu). Sitemaps
+    are built for search engines and are usually far more complete than
+    the visible nav, so this acts as a safety net to catch releases the
+    nav-based discovery misses.
+    """
+    parsed_home = urlparse(HOMEPAGE_URL)
+    robots_url = f"{parsed_home.scheme}://{parsed_home.netloc}/robots.txt"
+    robots_text = fetch_text(robots_url)
+
+    sitemap_urls = set()
+    for line in robots_text.splitlines():
+        if line.lower().startswith("sitemap:"):
+            sitemap_urls.add(line.split(":", 1)[1].strip())
+
+    if not sitemap_urls:
+        print("[info] no sitemap listed in robots.txt — skipping sitemap-based discovery.")
+        return set()
+
+    print(f"[info] found {len(sitemap_urls)} sitemap(s) via robots.txt")
+
+    found_products = set()
+    to_process = list(sitemap_urls)
+    processed = set()
+    max_sitemaps = 40  # safety cap in case of a huge sitemap index
+
+    while to_process and len(processed) < max_sitemaps:
+        sm_url = to_process.pop()
+        if sm_url in processed:
+            continue
+        processed.add(sm_url)
+
+        xml_text = fetch_text(sm_url)
+        if not xml_text:
+            continue
+
+        locs = re.findall(r"<loc>\s*(.*?)\s*</loc>", xml_text, re.IGNORECASE)
+        for loc in locs:
+            if loc.endswith(".xml"):
+                # this is a sitemap index entry pointing to another sitemap
+                if loc not in processed:
+                    to_process.append(loc)
+            else:
+                parsed = urlparse(loc)
+                if parsed.netloc == parsed_home.netloc and is_product_url(parsed.path):
+                    found_products.add(f"{parsed.scheme}://{parsed.netloc}{parsed.path}")
+
+    print(f"[info] sitemap discovery found {len(found_products)} product URL(s)")
+    return found_products
 
 
 def get_page_links(page_url: str) -> set:
@@ -201,6 +269,10 @@ def run_sweep() -> None:
         page_links = get_page_links(page)
         current_urls |= {u for u in page_links if is_product_url(urlparse(u).path)}
         time.sleep(random.uniform(1, 3))  # be polite between requests
+
+    # Second, independent discovery pass via sitemap — catches releases
+    # that aren't (yet) linked from the visible nav menu.
+    current_urls |= discover_sitemap_product_urls()
 
     new_urls = current_urls - seen
 
