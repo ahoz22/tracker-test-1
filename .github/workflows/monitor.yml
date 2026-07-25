@@ -1,9 +1,12 @@
 name: Chrome Hearts Monitor
 
+# Scheduling is handled entirely by an external service (cron-job.org)
+# calling this workflow's dispatch endpoint on a set interval. GitHub's
+# own `schedule:` trigger was removed — it fires unpredictably (can be
+# delayed hours) and was adding extra, uncontrolled runs on top of the
+# external trigger, which counts against your free Actions minutes.
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # runs roughly every 15 minutes
-  workflow_dispatch:          # lets you also trigger it manually to test
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,6 +30,7 @@ jobs:
       - name: Run monitor (single sweep)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           RUN_ONCE: "true"
           PYTHONUNBUFFERED: "1"
         run: python -u ch_url_monitor.py
